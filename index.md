@@ -12,9 +12,11 @@
 - It is as simple as possible but as complex as needed to show the patterns
 
 ```mermaid
-[LoggerService]-->[LoggerConfig]
-[LoggerService]-->[LogFormatter]
-[LoggerService]-->*[LogAppender]
+classDiagram
+
+    LogAppender <|-- DefaultLogAppender
+    DefaultLogAppender --> "0..1" ColorService 
+    ColorService --> ColorConfig
 ```
 
 ```typescript
