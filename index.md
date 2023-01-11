@@ -1,17 +1,18 @@
 # Patterns for Custom Standalone APIs in Angular
 
-- Actually, they are not patterns but idioms, as it is Angular-specific
-- We stick with the term pattern anyway, because it's a more common term
-- The patterns are primarily for reusable libs.
-- The patterns are taken from the implementations of `@angular/common/http`, `@angular/router`, `@ngrx/store`, and `@ngrx/effects`.
-- Golden Rule: Whenever possible, use `@Injectable({providedIn: 'root'})`
+Together with Standalone Components, the Angular team introduced Standalone APIs. They allow for setting up libraries in a more lightweight way. Examples of libraries currently providing Standalone APIs are the ``HttpClient`` and the ``Router``. Also, NGRX is an early adopter of this idea.
+
+In this article, I present several patterns for writing custom Standalone APIs inferred from the before mentioned libraries. For each pattern, the following aspects are discussed: intentions behind the pattern, description, example implementation, examples for occurrences in the mentioned libraries, and variations for implementation details.
+
+Most of these patterns are especially interesting for library authors. They have the potential to improve the DX for the library's consumers. On the other side, most of them might be overkill for applications. 
 
 ## Example
 
-- The inferred patterns are presented using a simple logger lib
-- It is as simple as possible but as complex as needed to show the patterns
+For presenting the inferred patterns, a simple logger library is used. This library is as simple as possible but as complex as needed to demonstrate the implementation of the patterns:
 
-![](logger.png)
+<img src="logger.png" style="max-width:300px">
+
+Each log message has a LogLevel, defined by an enum:
 
 ```typescript
 export enum LogLevel {
@@ -21,6 +22,10 @@ export enum LogLevel {
 }
 ```
 
+For the sake of simplicity, we restrict our Logger library to just three log levels. 
+
+An abstract ``LoggerConfig`` defines the possible configuration options:
+
 ```typescript
 export abstract class LoggerConfig {
   abstract level: LogLevel;
@@ -28,6 +33,8 @@ export abstract class LoggerConfig {
   abstract appenders: Type<LogAppender>[];
 }
 ```
+
+It's an abstract class on purpose, as interfaces cannot be used as tokens for DI. A constant of this class type defines the default values for the configuration options:
 
 ```typescript
 export const defaultConfig: LoggerConfig = {
@@ -37,11 +44,15 @@ export const defaultConfig: LoggerConfig = {
 };
 ```
 
+The ``LogFormatter`` is used for formatting log messages before they are published via a ``LogAppender``:
+
 ```typescript
 export abstract class LogFormatter {
   abstract format(level: LogLevel, category: string, msg: string): string;
 }
 ```
+
+Like the `LoggerConfiguration`, the ``LogFormatter`` is an abstract class used as a token. The consumer of the logger lib can adjust the formatting by providing its own implementation. As an alternative, they can go with a default implementation provided by the lib:
 
 ```typescript
 export class DefaultLogFormatter implements LogFormatter {
@@ -52,32 +63,40 @@ export class DefaultLogFormatter implements LogFormatter {
 }
 ```
 
+The ``LogAppender`` is another exchangeable concept responsible for appending the log message to a log:
+
 ```typescript
 export abstract class LogAppender {
   abstract append(level: LogLevel, category: string, msg: string): void;
 }
 ```
 
+The default implementation writes the message to the console:
+
 ```typescript
 export class DefaultLogAppender implements LogAppender {
   append(level: LogLevel, category: string, msg: string): void {
-    console.log(msg);
+    console.log(category + ' ' + msg);
   }
 }
 ```
 
-In out implementation, `LogAppender` implementations are provided via several multi providers. This allows other parts of the application to register additional ones. Hence, the Injector returns all of them within an array. As such an array cannot be used as a token, we use an `InjectionToken` instead:
+While there can only be one ``LogFormatter``, the library supports several ``LogAppenders``. For instance, a first ``LogAppender`` could write the message to the console while a second one could also send it to the server. 
+
+To make this possible, the individual `LogAppender`s are registered via multi providers. Hence, the Injector returns all of them within an array. As an array cannot be used as a DI token, the example uses an `InjectionToken` instead:
 
 ```typescript
 export const LOG_APPENDERS = new InjectionToken<LogAppender[]>("LOG_APPENDERS");
 ```
 
+The ``LoggserService`` itself receives the ``LoggerConfig``, the `LogFormatter`, and an array with ``LogAppenders`` via DI and allows to log messages for several ``LogLevels``:
+
 ```typescript
 @Injectable()
 export class LoggerService {
-  private appenders = inject(LOG_APPENDERS);
-  private formatter = inject(LogFormatter);
   private config = inject(LoggerConfig);
+  private formatter = inject(LogFormatter);
+  private appenders = inject(LOG_APPENDERS);
 
   log(level: LogLevel, category: string, msg: string): void {
     if (level < this.config.level) {
@@ -103,7 +122,9 @@ export class LoggerService {
 }
 ```
 
-Remark: While the "golden rule" tells us to use @Injectable(providedIn: 'root') where possible, the Logger goes with traditional providers instead. This allows to register it once per environment scope (see patterns `provide-Function` and `Service Chain`, below)
+## The Golden Rule
+
+Before I start with presenting the inferred patterns, I want to stress out what I call the golden rule for providing services: Especially in application code but in several situations in libraries, this is what you want to have: It's easy, tree-shakable, and even works with lazy loading. The latter aspect is less a merit of Angular than the underlying bundler: Everything that is just needed in a lazy bundle is put there. 
 
 ## Pattern: Provider Factory
 
@@ -115,7 +136,7 @@ Remark: While the "golden rule" tells us to use @Injectable(providedIn: 'root') 
 
 ### Description
 
-A Provider Factory is a function returning an Array with providers for a given library. This Array is cross-casted into Angular's `EnvironmentProviders` type to make sure, the providers can only be used in an environment scope -- first and foremost the root scope and scopes introduced with lazy routing configurations.
+A Provider Factory is a function returning an array with providers for a given library. This Array is cross-casted into Angular's `EnvironmentProviders` type to make sure the providers can only be used in an environment scope -- first and foremost, the root scope and scopes introduced with lazy routing configurations.
 
 Angular and NGRX place such functions in files called `provider.ts`.
 
@@ -171,9 +192,9 @@ bootstrapApplication(AppComponent, {
 ### Occurrences and Variations
 
 - This is a usual pattern used in all examined libraries
-- The Provider Factories for the `Router` and `HttpClient` have a second optional parameter that takes additional features (see Pattern Features, below).
-- Instead of passing in the concreate service implementation, e. g. LogFormatter, NGRX allows to take either a token or the concreate object for reducers.
-- The `HttpClient` takes an array with functional interceptors via a `with` function (see Pattern Feature, below). These functions are also registered as services.
+- The Provider Factories for the `Router` and `HttpClient` have a second optional parameter that takes additional features (see Pattern _Feature_, below).
+- Instead of passing in the concrete service implementation, e. g. LogFormatter, NGRX allows taking either a token or the concrete object for reducers.
+- The `HttpClient` takes an array with functional interceptors via a `with` function (see Pattern _Feature_, below). These functions are also registered as services.
 
 ## Pattern: Feature
 
@@ -185,11 +206,15 @@ bootstrapApplication(AppComponent, {
 
 ### Description
 
-The Provider Factory takes an optional array with a feature object. Each feature object has an identifier called `kind` and a `providers` array. The `kind` property allows to validate the combination of passed features. For instance, there might be features that are mutual exclusive like configuring XSRF token handling and disabling XSRF token handling for the `HttpClient`.
+The Provider Factory takes an optional array with a feature object. Each feature object has an identifier called `kind` and a `providers` array. The `kind` property allows for validating the combination of passed features. For instance, there might be mutually exclusive features like configuring XSRF token handling and disabling XSRF token handling for the `HttpClient`.
 
 ### Example
 
-Our example uses a color feature that allows to display messages of different `LoggerLevel`s in different colors. For categorizing features, a union type is used:
+Our example uses a color feature that allows for displaying messages of different `LoggerLevel`s in different colors:
+
+<img src="feature.png" style="max-width:300px">
+
+For categorizing features, a union type is used:
 
 ```typescript
 export type LoggerFeatureKind = "COLOR" | "OTHER-FEATURE" | "ONE-MORE-FEATURE";
@@ -226,7 +251,7 @@ export function withColor(config?: Partial<ColorConfig>): LoggerFeature {
 }
 ```
 
-The Provider Factory takes several features via an optional second parameter defined as a spread array:
+The Provider Factory takes several features via an optional second parameter defined as a rest array:
 
 ```typescript
 export function provideLogger(
@@ -287,9 +312,9 @@ As features are optional, the `DefaultLogAppender` passes `optional: true` to `i
 ### Occurrences and Variations
 
 - The `Router` uses it, e. g. for configuring preloading or for activating debug tracing.
-- The `HttpClient` uses it, e. g. for providing interceptors, for configuring JSONP, and for configuring/ disabling the XSRF token handling.
-- Both, the Router and the HttpClient, combine the possible features to a union type (e.g. ``export type AllowedFeatures = ThisFeature | ThatFeature``). This helps IDEs to propose built-in features.
-- Some implementations just inject the current `Injector` and use it to find out which features have been configured. This is an imperative alternative to using `optional: true`.
+- The `HttpClient` uses it, e. g. for providing interceptors, configuring JSONP, and configuring/ disabling the XSRF token handling
+- Both, the ``Router`` and the ``HttpClient``, combine the possible features to a union type (e.g. ``export type AllowedFeatures = ThisFeature | ThatFeature``). This helps IDEs to propose built-in features.
+- Some implementations inject the current `Injector` and use it to find out which features have been configured. This is an imperative alternative to using `optional: true`.
 - Angular's feature implementations prefix the properties `kind` and `providers` with `ɵ` and hence declare them as internal properties.
 
 ## Pattern: Configuration Provider Factory
@@ -302,11 +327,11 @@ As features are optional, the `DefaultLogAppender` passes `optional: true` to `i
 
 ### Description
 
-Configuration Provider Factories extend the behavior of an existing service. They may provide additional services and use an `ENVIRONMENT_INITIALIZER` to get hold of instances of both, the provided services as well as the existing services to extend.
+Configuration Provider Factories extend the behavior of an existing service. They may provide additional services and use an `ENVIRONMENT_INITIALIZER` to get hold of instances of both the provided services as well as the existing services to extend.
 
 ### Example
 
-Let's assume an extended version of our `LoggerService` that allows to define an additional `LogAppender` for each log category:
+Let's assume an extended version of our `LoggerService` that allows for defining an additional `LogAppender` for each log category:
 
 ```typescript
 @Injectable()
@@ -376,11 +401,11 @@ export function provideCategory(
 }
 ```
 
-This factory creates a provider for the ``LogAppender`` class. However, we don't need the class but rather an instance of it. Also, we need the Injector to resolve this instance's dependencies. Both happens, when retrieving a ``LogAppender`` via inject. 
+This factory creates a provider for the ``LogAppender`` class. However, we don't need the class but rather an instance of it. Also, we need the ``Injector`` to resolve this instance's dependencies. Both happen when retrieving a ``LogAppender`` via inject. 
 
-Exactly this is done by the ``ENVIRONMENT_INITIALIZER`` which is multi provider bound to the token ``ENVIRONMENT_INITIALIZER`` and pointing to a function. It gets the ``LogAppender`` injected but also the ``LoggerService``. Then, the appender is registered with the logger.
+Precisely this is done by the `ENVIRONMENT_INITIALIZER`, which is multi provider bound to the token ``ENVIRONMENT_INITIALIZER`` and pointing to a function. It gets the ``LogAppender`` injected but also the ``LoggerService``. Then, the ``LogAppender`` is registered with the logger. 
 
-This allows to extend the existing ``LoggerService`` that can even come from a parent scope. For instance, the following example assumes the ``LoggerService`` in the root scope while the additional log category is setup in the scope of a lazy route:
+This allows for extending the existing ``LoggerService`` that can even come from a parent scope. For instance, the following example assumes the ``LoggerService`` in the root scope while the additional log category is setup in the scope of a lazy route:
 
 ```typescript
 export const FLIGHT_BOOKING_ROUTES: Routes = [
@@ -413,24 +438,24 @@ export const FLIGHT_BOOKING_ROUTES: Routes = [
 
 ### Occurrences and Variations
 
-- `@ngrx/store` uses this pattern to register feature slices.
-- `@ngrx/effects` uses this pattern, to wire-up effects provided by a feature.
+- `@ngrx/store` uses this pattern to register feature slices
+- `@ngrx/effects` uses this pattern, to wire-up effects provided by a feature
 - The feature ``withDebugTracing`` uses this pattern to subscribe to the ``Router``'s ``events`` Observable.
   
 ## Pattern: NgModule Bridge
 
 ### Intentions
 
-- Staying backwards compatible with existing code using NgModules.
-- Allowing such application parts to setup ``EnvironmentProviders`` that come from a Provider Factory. 
+- Staying backwards compatible with existing code using ``NgModules``.
+- Allowing such application parts to set up `EnvironmentProviders` that come from a Provider Factory. 
 
 ### Description
 
-The NgModule Bridge is a NgModule deriving (some of) its providers via a Provider Factory (see pattern Provider Factory). To give the caller more control over the provided services, static methods like ``forRoot`` can be used. These methods can take an configuration object.
+The NgModule Bridge is a NgModule deriving (some of) its providers via a Provider Factory (see pattern _Provider Factory_). To give the caller more control over the provided services, static methods like ``forRoot`` can be used. These methods can take a configuration object.
 
 ### Example
 
-The following NgModules allows to setup the Logger in a traditional way:
+The following ``NgModules`` allows for setting up the Logger in a traditional way:
 
 ```typescript
 @NgModule({
@@ -463,7 +488,7 @@ export class LoggerModule {
 }
 ```
 
-To avoid reimplementing the Provider Factories, its methods delegate to them. As using such methods is usual when working with NgModules, consumers can leverage existing knowledge and conventions.
+To avoid reimplementing the Provider Factories, the Module's methods delegate to them. As using such methods is usual when working with NgModules, consumers can leverage existing knowledge and conventions.
 
 ### Occurrences and Variations
 
@@ -477,7 +502,7 @@ To avoid reimplementing the Provider Factories, its methods delegate to them. As
 
 ### Description
 
-When the same service is placed in several nested environment injectors, we normally only get the service instance of the current scope. Hence, a call to the service in a nested scope is not respected in the parent scope. To work around this, a service can lookup an instance of itself in the parent scope and delegate to it.
+When the same service is placed in several nested environment injectors, we normally only get the service instance of the current scope. Hence, a call to the service in a nested scope is not respected in the parent scope. To work around this, a service can look up an instance of itself in the parent scope and delegate to it.
 
 ### Example
 
@@ -520,9 +545,9 @@ export const FLIGHT_BOOKING_ROUTES: Routes = [
 ];
 ```
 
-This sets up **another** set of the Logger's services in the environment injector of this lazy route and its children. These services are shadowing their counter parts in the root scope. Hence, when a component in the lazy scope calls the ``LoggerService``, the services in the root scope are not triggered.
+This sets up **another** set of the Logger's services in the environment injector of this lazy route and its children. These services are shadowing their counterparts in the root scope. Hence, when a component in the lazy scope calls the ``LoggerService``, the services in the root scope are not triggered.
 
-To prevent this, we can get hold of the ``LoggerService`` from the parent scope. More precisely, it's not _the_ parent scope but the "nearest ancestor scope" providing a ``LoggerService``. After that, the service can delegate to its parent. This way, the services are chained:
+To prevent this, we can get the `LoggerService``` from the parent scope. More precisely, it's not _the_ parent scope but the "nearest ancestor scope" providing a ``LoggerService``. After that, the service can delegate to its parent. This way, the services are chained:
 
 ```typescript
 @Injectable()
@@ -551,9 +576,9 @@ export class LoggerService {
 }
 ```
 
-When using inject to get hold of the parent's ``LoggerService``, we need to pass the ``optional: true`` to avoid an exception if there is no ancestor scope with a ``LoggerService``. Passing ``skipSelf: true`` makes sure, only ancestor scopes are searched. Otherwise Angular would start with the current scope and retrieve the calling service itself.
+When using inject to get hold of the parent's ``LoggerService``, we need to pass the ``optional: true`` to avoid an exception if there is no ancestor scope with a ``LoggerService``. Passing ``skipSelf: true`` makes sure, only ancestor scopes are searched. Otherwise, Angular would start with the current scope and retrieve the calling service itself.
 
-Also, the example shown here allows to activate/ deactivate this behavior, via a new ``chaining`` flag in the ``LoggerConfiguration``.
+Also, the example shown here allows activating/deactivating this behavior via a new ``chaining`` flag in the ``LoggerConfiguration``.
 
 ### Occurrences and Variations
 
@@ -568,7 +593,7 @@ Also, the example shown here allows to activate/ deactivate this behavior, via a
 
 ### Description
 
-Instead of forcing the consumer to implement a class-based service following a given interface, a library also accepts functions. Internally, they can be registered as a service using useValue.
+Instead of forcing the consumer to implement a class-based service following a given interface, a library also accepts functions. Internally, they can be registered as a service using ``useValue``.
 
 ### Example
 
@@ -612,7 +637,7 @@ export const LOG_FORMATTER = new InjectionToken<LogFormatter | LogFormatFn>(
 );
 ```
 
-This ``InjectionToken`` supports both, class based ``LogFormatter`` as well as functional ones. This prevents breaking existing code. As a consequence of supporting both, provideLogger needs to treat both cases in a slightly different way: 
+This `InjectionToken` supports both class-based `LogFormatter` as well as functional ones. This prevents breaking existing code. As a consequence of supporting both, ``provideLogger`` needs to treat both cases in a slightly different way: 
 
 ```typescript
 export function provideLogger(config: Partial<LoggerConfig>, ...features: LoggerFeature[]): EnvironmentProviders {
@@ -649,9 +674,9 @@ export function provideLogger(config: Partial<LoggerConfig>, ...features: Logger
 }
 ```
 
-While class-based services are registered with ``useClass``, ``useValue`` is the right choice for their functional counter parts.
+While class-based services are registered with ``useClass``, ``useValue`` is the right choice for their functional counterparts.
 
-Also, the consumers of the ``LogFormatter`` need to be prepared for both, the functional as well as the class-based approach:
+Also, the consumers of the ``LogFormatter`` need to be prepared for both the functional as well as class-based approach:
 
 ```typescript
 @Injectable()
@@ -686,8 +711,8 @@ export class LoggerService {
 
 ### Occurrences and Variations
 
-- The ``HttpClient`` allows to use functional interceptors. They are registered via a feature (see pattern Feature).
-- The ``Router`` allows to use function for implementing guards and resolvers.
+- The `HttpClient` allows using functional interceptors. They are registered via a feature (see pattern _Feature_).
+- The `Router` allows using functions for implementing guards and resolvers.
 
 
 ## Bonus: Aggregating Provider Factory
@@ -703,13 +728,13 @@ At the end, I want to present a pattern that is not found in the examined librar
 
 Provider Factories return an instance of EnvironmentProviders. Technically, this is a wrapper for a ``Provider`` array. The property holding this array is prefixed with ``ɵ`` and hence marked as internal. Hence, EnvironmentProviders becomes a black box for the application. Also, this makes sure that the providers can only be used for Environment Injectors like the root injector or the injector of a (lazy or not lazy) route. 
 
-As the Providers array is internal, we cannot access it. This also prevents combining provider arrays coming from several libraries. To bypass this limitation, however, we can cross cast EnvironmentProviders into a custom type mimicking the internal structure.
+As the Providers array is internal, we cannot access it. This also prevents combining provider arrays coming from several libraries. To bypass this limitation, however, we can cross-cast EnvironmentProviders into a custom type mimicking the internal structure.
 
-This pattern needs to be used carefully because it can lead to too much provided services. This, in turn, can influence tree-shakability. However, it also helps to hide implementation details from the consumer. For instance, when providing a library with the business logic for a given domain of your application, a Aggregating Provider Factory could set up the NGRX store including a feature slice and reducers for the domain. The consumer of the domain library doesn't need to burden themselves with these technical aspects.
+This pattern needs to be used carefully because it can lead to too many provided services. This, in turn, can influence tree-shakability. However, it also helps to hide implementation details from the consumer. For instance, when providing a library with the business logic for a given domain of your application, an Aggregating Provider Factory could set up the NGRX store, including a feature slice and reducers for the domain. The consumer of the domain library doesn't need to burden themselves with these technical aspects.
 
 ### Example
 
-To mimic the EnvironmentProviders internal structure, we create a type called ``InternalEnvironmentProviders``:
+To mimic the ``EnvironmentProviders`` internal structure, we create a type called ``InternalEnvironmentProviders``:
 
 ```typescript
 type InternalEnvironmentProviders = {
@@ -717,7 +742,7 @@ type InternalEnvironmentProviders = {
 };
 ```
 
-When doing this, we need to understand that there are no guarantees for backwards compatibility of Angular's internal parts. Hence, we should limit the usage of ``InternalEnvironmentProviders`` to a minimum of well maintained functions. 
+When doing this, we need to understand that there are no guarantees for backwards compatibility of Angular's internal parts. Hence, we should limit the usage of ``InternalEnvironmentProviders`` to a minimum of well-maintained functions. 
 
 In our case, the only function using ``InternalEnvironmentProviders`` is ``combine``:
 
@@ -740,9 +765,9 @@ export function combine(
 
 This function takes two ``EnvironmentProviders`` instances and cross casts them into ``InternalEnvironmentProviders``. From TypeScript's view point there is no relationship between these two types. Hence, TypeScripts type checks would prevent this case. To bypass this check, we need to cast to ``unknown`` first.
 
-After this short but also adventurous task, ``combine`` merges the providers together and wraps them up in another ``EnvironmentProviders`` object. 
+After this short but adventurous task, ``combine`` merges the providers together and wraps them up in another ``EnvironmentProviders`` object. 
 
-Now, we can use ``combine`` for an Aggregating Provider Factory that returns both, the providers for the Logger library as well as for another library:
+Now, we can use ``combine`` for an Aggregating Provider Factory that returns both the providers for the Logger library as well as for another library:
 
 ```typescript
 export function provideDiagnostics(): EnvironmentProviders {
@@ -753,7 +778,7 @@ export function provideDiagnostics(): EnvironmentProviders {
 }
 ```
 
-A more generic version of ``combine`` that allows to merge an arbitrarily amount of ``EnvironmentProviders`` instances could look like this:
+A more generic version of ``combine`` that allows merging an arbitrary amount of ``EnvironmentProviders`` instances could look like this:
 
 ```typescript
 export function combineAll(
