@@ -55,6 +55,7 @@ export abstract class LogFormatter {
 Like the `LoggerConfiguration`, the ``LogFormatter`` is an abstract class used as a token. The consumer of the logger lib can adjust the formatting by providing its own implementation. As an alternative, they can go with a default implementation provided by the lib:
 
 ```typescript
+@Injectable()
 export class DefaultLogFormatter implements LogFormatter {
   format(level: LogLevel, category: string, msg: string): string {
     const levelString = LogLevel[level].padEnd(5);
@@ -74,6 +75,7 @@ export abstract class LogAppender {
 The default implementation writes the message to the console:
 
 ```typescript
+@Injectable()
 export class DefaultLogAppender implements LogAppender {
   append(level: LogLevel, category: string, msg: string): void {
     console.log(category + ' ' + msg);
@@ -124,7 +126,11 @@ export class LoggerService {
 
 ## The Golden Rule
 
-Before I start with presenting the inferred patterns, I want to stress out what I call the golden rule for providing services: Especially in application code but in several situations in libraries, this is what you want to have: It's easy, tree-shakable, and even works with lazy loading. The latter aspect is less a merit of Angular than the underlying bundler: Everything that is just needed in a lazy bundle is put there. 
+Before I start with presenting the inferred patterns, I want to stress out what I call the golden rule for providing services: 
+
+> Whenever possible, use ``@Injectable({providedIn: 'root'})``!
+
+Especially in application code but in several situations in libraries, this is what you want to have: It's easy, tree-shakable, and even works with lazy loading. The latter aspect is less a merit of Angular than the underlying bundler: Everything that is just needed in a lazy bundle is put there. 
 
 ## Pattern: Provider Factory
 
