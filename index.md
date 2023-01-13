@@ -6,6 +6,8 @@ In this article, I present several patterns for writing custom Standalone APIs i
 
 Most of these patterns are especially interesting for library authors. They have the potential to improve the DX for the library's consumers. On the other side, most of them might be overkill for applications. 
 
+📂 [Source code used in examples](https://github.com/manfredsteyer/standalone-example-cli.git)
+
 ## Example
 
 For presenting the inferred patterns, a simple logger library is used. This library is as simple as possible but as complex as needed to demonstrate the implementation of the patterns:
@@ -223,7 +225,11 @@ Our example uses a color feature that allows for displaying messages of differen
 For categorizing features, a union type is used:
 
 ```typescript
-export type LoggerFeatureKind = "COLOR" | "OTHER-FEATURE" | "ONE-MORE-FEATURE";
+export enum LoggerFeatureKind {
+    COLOR,
+    OTHER_FEATURE,
+    ADDITIONAL_FEATURE
+}
 ```
 
 Each feature is represented by an object of `LoggerFeature`:
@@ -242,7 +248,7 @@ export function withColor(config?: Partial<ColorConfig>): LoggerFeature {
   const internal = { ...defaultColorConfig, ...config };
 
   return {
-    kind: "COLOR",
+    kind: LoggerFeatureKind.COLOR,
     providers: [
       {
         provide: ColorConfig,
@@ -268,7 +274,7 @@ export function provideLogger(
 
   // Inspecting passed features
   const colorFeatures =
-    features?.filter((f) => f.kind === "COLOR")?.length ?? 0;
+    features?.filter((f) => f.kind === LoggerFeatureKind.COLOR)?.length ?? 0;
 
   // Validating passed features
   if (colorFeatures > 1) {
@@ -385,7 +391,9 @@ export function provideCategory(
   category: string,
   appender: Type<LogAppender>
 ): EnvironmentProviders {
-  // TODO: Is this local token a good idea ?!
+  // Internal/ Local token for registering the service
+  // and retrieving the resolved service instance
+  // immediately after.
   const appenderToken = new InjectionToken<LogAppender>("APPENDER_" + category);
 
   return makeEnvironmentProviders([
@@ -452,8 +460,10 @@ export const FLIGHT_BOOKING_ROUTES: Routes = [
 
 ### Intentions
 
-- Staying backwards compatible with existing code using ``NgModules``.
+- Not breaking existing code using ``NgModules`` when switching to Standalone APIs.
 - Allowing such application parts to set up `EnvironmentProviders` that come from a Provider Factory. 
+
+Remarks: For new code, this pattern seems to be overkill, because the Provider Factory can be directly called for the consuming (legacy) NgModules. 
 
 ### Description
 
@@ -529,7 +539,7 @@ export const FLIGHT_BOOKING_ROUTES: Routes = [
       provideLogger(
         {
           level: LogLevel.DEBUG,
-          bubbleUp: true,
+          chaining: true,
           appenders: [DefaultLogAppender],
         },
         withColor({
